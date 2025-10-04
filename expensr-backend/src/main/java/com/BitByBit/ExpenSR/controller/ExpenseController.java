@@ -1,63 +1,71 @@
-package com.BitByBit.ExpenSR.controller;
-
-import com.BitByBit.ExpenSR.entity.Expense;
-import com.BitByBit.ExpenSR.repository.ExpenseRepository;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.*;
-
-import java.util.List;
-import java.util.Optional;
-
 @RestController
 @RequestMapping("/api/expenses")
+@Validated
 public class ExpenseController {
 
     @Autowired
     private ExpenseRepository expenseRepository;
 
-    // GET all expenses
     @GetMapping
-    public List<Expense> getAllExpenses() {
-        return expenseRepository.findAll();
+    @Cacheable(value = "expenses", key = "'all'")
+    public ResponseEntity<List<Expense>> getAllExpenses() {
+        List<Expense> expenses = expenseRepository.findAll();
+        return ResponseEntity.ok(expenses);
     }
 
-    // GET expense by ID
     @GetMapping("/{id}")
+    @Cacheable(value = "expense", key = "#id")
     public ResponseEntity<Expense> getExpenseById(@PathVariable Long id) {
-        Optional<Expense> expense = expenseRepository.findById(id);
-        if (expense.isPresent()) {
-            return ResponseEntity.ok(expense.get());
-        } else {
-            return ResponseEntity.notFound().build();
-        }
+        return expenseRepository.findById(id)
+                .map(ResponseEntity::ok)
+                .orElseThrow(() -> new ResourceNotFoundException("Expense not found with id: " + id));
     }
 
-    // POST create new expense
     @PostMapping
-    public Expense createExpense(@RequestBody Expense expense) {
-        return expenseRepository.save(expense);
+    @CacheEvict(value = "expenses", allEntries = true)
+    public ResponseEntity<Expense> createExpense(@Valid @RequestBody CreateExpenseRequest request) {
+        Expense expense = mapToEntity(request);
+        Expense savedExpense = expenseRepository.save(expense);
+        return ResponseEntity.status(HttpStatus.CREATED).body(savedExpense);
     }
 
-    // PUT update expense
     @PutMapping("/{id}")
-    public ResponseEntity<Expense> updateExpense(@PathVariable Long id, @RequestBody Expense expense) {
-        if (expenseRepository.existsById(id)) {
-            expense.setId(id);
-            return ResponseEntity.ok(expenseRepository.save(expense));
-        } else {
-            return ResponseEntity.notFound().build();
-        }
+    @CacheEvict(value = {"expense", "expenses"}, key = "#id", allEntries = true)
+    public ResponseEntity<Expense> updateExpense(
+            @PathVariable Long id, 
+            @Valid @RequestBody CreateExpenseRequest request) {
+        
+        return expenseRepository.findById(id)
+                .map(expense -> {
+                    updateEntityFromRequest(expense, request);
+                    return ResponseEntity.ok(expenseRepository.save(expense));
+                })
+                .orElseThrow(() -> new ResourceNotFoundException("Expense not found with id: " + id));
     }
 
-    // DELETE expense
     @DeleteMapping("/{id}")
+    @CacheEvict(value = {"expense", "expenses"}, key = "#id", allEntries = true)
     public ResponseEntity<Void> deleteExpense(@PathVariable Long id) {
-        if (expenseRepository.existsById(id)) {
-            expenseRepository.deleteById(id);
-            return ResponseEntity.ok().build();
-        } else {
-            return ResponseEntity.notFound().build();
+        if (!expenseRepository.existsById(id)) {
+            throw new ResourceNotFoundException("Expense not found with id: " + id);
         }
+        expenseRepository.deleteById(id);
+        return ResponseEntity.noContent().build();
+    }
+
+    private Expense mapToEntity(CreateExpenseRequest request) {
+        Expense expense = new Expense();
+        expense.setDescription(request.getDescription());
+        expense.setAmount(request.getAmount());
+        expense.setCategory(request.getCategory());
+        expense.setDate(request.getDate());
+        return expense;
+    }
+
+    private void updateEntityFromRequest(Expense expense, CreateExpenseRequest request) {
+        expense.setDescription(request.getDescription());
+        expense.setAmount(request.getAmount());
+        expense.setCategory(request.getCategory());
+        expense.setDate(request.getDate());
     }
 }
